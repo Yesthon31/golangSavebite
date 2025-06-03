@@ -51,9 +51,7 @@ type RecipeResponse struct {
 }
 
 func InitDB() {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
-	}
+	_ = godotenv.Load() // Coba load .env, tapi jangan panic kalau gagal
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -73,6 +71,7 @@ func InitDB() {
 
 	fmt.Println("✅ Berhasil terhubung ke database")
 }
+
 
 func DeleteCategory(userID int, categoryID int) error {
 	hasPerm, err := UserHasPermission(userID, "delete_category")
