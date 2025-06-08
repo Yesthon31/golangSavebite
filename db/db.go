@@ -19,6 +19,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+var DB *sql.DB
 var jwtSecret = []byte("your_secret_key")
 
 type Food struct {
@@ -48,7 +49,7 @@ type RecipeRequest struct {
 type RecipeResponse struct {
 	Recipe string `json:"recipe"`
 }
-
+ 
 func InitDB() {
 	_ = godotenv.Load() // Coba load .env, tapi jangan panic kalau gagal
 
@@ -70,6 +71,7 @@ func InitDB() {
 
 	fmt.Println("✅ Berhasil terhubung ke database")
 }
+
 
 func DeleteCategory(userID int, categoryID int) error {
 	hasPerm, err := UserHasPermission(userID, "delete_category")
