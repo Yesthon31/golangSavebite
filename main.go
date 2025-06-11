@@ -20,6 +20,7 @@ import (
 type RecipeIngredient struct {
 	ID       int `json:"id"`
 	Quantity int `json:"quantity"`
+	FoodID   int `json:"food_id"`
 }
 
 type RecipeRequest struct {
@@ -135,8 +136,12 @@ func main() {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Authorization","X-CSRF-Token"},
 	}))
+
+	r.OPTIONS("/*path", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusNoContent)
+	})
 
 	r.POST("/register", db.RegisterHandler)
 	r.POST("/login", db.LoginHandler)

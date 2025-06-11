@@ -12,7 +12,7 @@ require (
 	google.golang.org/api v0.229.0
 )
 
-require github.com/joho/godotenv v1.5.1 
+require github.com/joho/godotenv v1.5.1
 
 require (
 	cloud.google.com/go v0.115.0 // indirect
