@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
-	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -49,19 +47,23 @@ type RecipeRequest struct {
 type RecipeResponse struct {
 	Recipe string `json:"recipe"`
 }
- 
-func InitDB() {
-	_ = godotenv.Load() // Coba load .env, tapi jangan panic kalau gagal
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL environment variable is not set")
-	}
+type FertilizerRequest struct {
+	FoodID []int `json:"food_id"`
+}
+
+type FertilizerResponse struct {
+	Fertilizer string `json:"fertilizer"`
+}
+
+func InitDB() {
+	// Format DSN MySQL: username:password@tcp(host:port)/dbname
+	dsn := "root:@tcp(localhost:3306)/savebitedata"
 
 	var err error
-	DB, err = sql.Open("mysql", databaseURL)
+	DB, err = sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatalf("Gagal terhubung ke database: %v", err)
+		log.Fatalf("Gagal membuka koneksi ke database: %v", err)
 	}
 
 	err = DB.Ping()
@@ -69,9 +71,8 @@ func InitDB() {
 		log.Fatalf("Tidak bisa terhubung ke database: %v", err)
 	}
 
-	fmt.Println("✅ Berhasil terhubung ke database")
+	fmt.Println("✅ Berhasil terhubung ke database lokal")
 }
-
 
 func DeleteCategory(userID int, categoryID int) error {
 	hasPerm, err := UserHasPermission(userID, "delete_category")
@@ -323,6 +324,36 @@ func GetAllRecipesAdmin(userID int) ([]map[string]interface{}, error) {
 	return result, nil
 }
 
+func GetAllFertilizersAdmin(userID int) ([]map[string]interface{}, error) {
+	hasPerm, err := UserHasPermission(userID, "view_fertilizers")
+	if err != nil || !hasPerm {
+		return nil, fmt.Errorf("permission denied to view fertilizers")
+	}
+
+	rows, err := DB.Query("SELECT fertilizer_id, fertilizer, created_at, created_by, ingredients FROM view_all_fertilizers")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var fertilizer, createdAt, createdBy, ingredients string
+		if err := rows.Scan(&id, &fertilizer, &createdAt, &createdBy, &ingredients); err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]interface{}{
+			"id":          id,
+			"fertilizer":  fertilizer,
+			"createdAt":   createdAt,
+			"createdBy":   createdBy,
+			"ingredients": strings.Split(ingredients, ","),
+		})
+	}
+	return result, nil
+}
+
 func GetAllUserLogsAdmin(userID int) ([]map[string]interface{}, error) {
 	hasPerm, err := UserHasPermission(userID, "view_login_logs")
 	if err != nil || !hasPerm {
@@ -406,6 +437,77 @@ func AddFoodRecipe(foodIDs []int, recipe string, userID string) error {
 	return nil
 }
 
+func AddFertilizer(fertilizer string, foodIDs []int, userID int) error {
+	// 1. Cek izin user
+	hasPerm, err := UserHasPermission(userID, "add_fertilizer")
+	if err != nil || !hasPerm {
+		return fmt.Errorf("unauthorized")
+	}
+
+	// 2. Mulai transaksi biar lebih aman
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	// 3. Simpan ke tabel food_fertilizers
+	res, err := tx.Exec("INSERT INTO food_fertilizers (fertilizer, user_id) VALUES (?, ?)", fertilizer, userID)
+	if err != nil {
+		return err
+	}
+
+	fertilizerID, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	// 4. Simpan ke tabel fertilizer_ingredients
+	for _, foodID := range foodIDs {
+		_, err := tx.Exec("INSERT INTO fertilizer_ingredients (fertilizer_id, food_id) VALUES (?, ?)", fertilizerID, foodID)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func AddFoodFertilizer(foodIDs []int, fertilizer string, userID string) error {
+	// Cek apakah userID valid
+	uid, err := strconv.Atoi(userID)
+	if err != nil {
+		return err
+	}
+
+	// 1. Simpan fertilizer ke food_fertilizers
+	res, err := DB.Exec("INSERT INTO food_fertilizers (fertilizer, user_id) VALUES (?, ?)", fertilizer, uid)
+	if err != nil {
+		return err
+	}
+
+	// 2. Ambil ID fertilizer terakhir yang dimasukkan
+	fertilizerID, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	// 3. Masukkan relasi ke tabel fertilizer_ingredients
+	for _, foodID := range foodIDs {
+		_, err := DB.Exec("INSERT INTO fertilizer_ingredients (fertilizer_id, food_id) VALUES (?, ?)", fertilizerID, foodID)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func GetFoodRecipes(userID string) ([]map[string]interface{}, error) {
 	id, _ := strconv.Atoi(userID)
 	rows, err := DB.Query("SELECT recipe_id, recipe, created_at, ingredients FROM view_all_recipes WHERE user_id = ?", id)
@@ -424,6 +526,31 @@ func GetFoodRecipes(userID string) ([]map[string]interface{}, error) {
 		result = append(result, map[string]interface{}{
 			"id":          id,
 			"recipe":      recipe,
+			"createdAt":   createdAt,
+			"ingredients": strings.Split(ingredients, ","),
+		})
+	}
+	return result, nil
+}
+
+func GetFoodFertilizers(userID string) ([]map[string]interface{}, error) {
+	id, _ := strconv.Atoi(userID)
+	rows, err := DB.Query("SELECT fertilizer_id, fertilizer, created_at, ingredients FROM view_all_fertilizers WHERE user_id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var fertilizer, createdAt, ingredients string
+		if err := rows.Scan(&id, &fertilizer, &createdAt, &ingredients); err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]interface{}{
+			"id":          id,
+			"fertilizer":  fertilizer,
 			"createdAt":   createdAt,
 			"ingredients": strings.Split(ingredients, ","),
 		})
@@ -622,6 +749,12 @@ func DeleteUser(requesterID int, targetUserID int) error {
 	}
 
 	_, err = tx.Exec("DELETE FROM food_recipes WHERE user_id = ?", targetUserID)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	_, err = tx.Exec("DELETE FROM food_fertilizers WHERE user_id = ?", targetUserID)
 	if err != nil {
 		tx.Rollback()
 		return err

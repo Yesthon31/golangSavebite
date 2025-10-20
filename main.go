@@ -27,6 +27,16 @@ type RecipeRequest struct {
 	Ingredients []RecipeIngredient `json:"ingredients"`
 }
 
+type FertilizerIngredient struct {
+	ID       int `json:"id"`
+	Quantity int `json:"quantity"`
+	FoodID   int `json:"food_id"`
+}
+
+type FertilizerRequest struct {
+	Ingredients []FertilizerIngredient `json:"ingredients"`
+}
+
 type ChatMessage struct {
 	Message string `json:"message" binding:"required"`
 }
@@ -68,22 +78,23 @@ func chatHandler(c *gin.Context) {
 	defer client.Close()
 	log.Printf("Gemini client created successfully")
 
-	model := client.GenerativeModel("gemini-1.5-flash")
+	model := client.GenerativeModel("gemini-2.5-flash")
 	model.SetTemperature(0.7)
 
-	prompt := fmt.Sprintf(`User bertanya: %s
-
-Berikan respons dalam format berikut:
-1. Jika ditanya tentang makanan, selalu sertakan:
-   - Ketahanan di suhu ruang: (sebutkan berapa jam/hari)
-   - Ketahanan di kulkas: (sebutkan berapa hari)
-   - Tips penyimpanan: (berikan tips singkat)
-
-2. Jika ditanya hal lain:
-   - jawab dengan sopan pertanyaannya harus tentang makanan
-   - jangan berikan informasi yang tidak relevan
-Gunakan bahasa Indonesia yang formal dan ramah. Hindari penggunaan simbol seperti * atau #.
-Kamu adalah AI asisten dari SaveBite, perusahaan yang fokus pada keamanan pangan.`, req.Message)
+	prompt := fmt.Sprintf(`The user asks: %s
+	Answer in English with a neat and easy-to-read layout suitable for the application.
+	Provide your response in the following format:
+	1. If the question is about food, always include:
+	   - Shelf life at room temperature: (specify how many hours/days)
+	   - Shelf life in the refrigerator: (specify how many days)
+	   - Storage tips: (give short, practical tips)
+	
+	2. If the question is about something else:
+	   - Politely explain that the question should be about food
+	   - Do not provide irrelevant information
+	
+	Use formal and friendly English. Avoid using symbols such as * or #.
+	You are an AI assistant from SaveBite, a company focused on food safety.`, req.Message)
 
 	log.Printf("Sending prompt to Gemini with message length: %d", len(req.Message))
 
@@ -136,7 +147,7 @@ func main() {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Type", "Authorization","X-CSRF-Token"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Authorization", "X-CSRF-Token"},
 	}))
 
 	r.OPTIONS("/*path", func(c *gin.Context) {
@@ -230,6 +241,16 @@ func main() {
 		c.JSON(200, data)
 	})
 
+	auth.GET("/fertilizers", func(c *gin.Context) {
+		userID := c.MustGet("user_id").(string)
+		data, err := db.GetFoodFertilizers(userID)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Gagal mengambil pupuk"})
+			return
+		}
+		c.JSON(200, data)
+	})
+
 	auth.POST("/recipe", func(c *gin.Context) {
 		var req RecipeRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -261,8 +282,24 @@ func main() {
 		client, _ := genai.NewClient(ctx, option.WithAPIKey(apiKey))
 		defer client.Close()
 
-		model := client.GenerativeModel("gemini-1.5-flash")
-		prompt := fmt.Sprintf("Buat resep dari bahan bahan ini : %s. Akhiri dengan by Chef SaveBite", strings.Join(foodNames, ", "))
+		model := client.GenerativeModel("gemini-2.5-flash")
+		prompt := fmt.Sprintf(
+			"Create a delicious recipe using the following ingredients: %s.\n\n"+
+				"Start with the recipe title first, then write in an engaging and easy-to-read style suitable for the app. "+
+				"Make sure each step is neatly formatted, spaced properly, and all step numbers are aligned. "+
+				"No need for introductory phrases—go straight to the recipe title:\n\n"+
+				"🍽️ Recipe Title\n"+
+				"📝 A short description of the dish\n"+
+				"🥦 Ingredients:\n"+
+				"- Use emojis that match the ingredients (for example: 🍅, 🧄, 🧂, 🍚)\n\n"+
+				"👨‍🍳 Cooking Steps:\n"+
+				"- Write each step clearly and concisely\n"+
+				"- Add emojis to highlight important actions (for example: 🔥 when cooking, 🍽️ when serving)\n\n"+
+				"💡 Add extra tips if available\n\n"+
+				"End with the sentence: '👨‍🍳 by Chef SaveBite'",
+			strings.Join(foodNames, ", "),
+		)
+
 		resp, _ := model.GenerateContent(ctx, genai.Text(prompt))
 
 		var out strings.Builder
@@ -272,6 +309,64 @@ func main() {
 
 		db.AddFoodRecipe(foodIDs, out.String(), userID)
 		c.JSON(200, db.RecipeResponse{Recipe: out.String()})
+	})
+
+	auth.POST("/fertilizer", func(c *gin.Context) {
+		var req FertilizerRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Format salah"})
+			return
+		}
+		userID := c.MustGet("user_id").(string)
+
+		var foodNames []string
+		var foodIDs []int
+		for _, item := range req.Ingredients {
+			var name string
+			var stock int
+			err := db.DB.QueryRow("SELECT name, quantity FROM foods WHERE id = ? AND user_id = ?", item.ID, userID).Scan(&name, &stock)
+			if err != nil {
+				c.JSON(404, gin.H{"error": fmt.Sprintf("Makanan ID %d tidak ditemukan", item.ID)})
+				return
+			}
+			if stock < item.Quantity {
+				c.JSON(400, gin.H{"error": fmt.Sprintf("Stok tidak cukup untuk %s", name)})
+				return
+			}
+			foodNames = append(foodNames, fmt.Sprintf("%dx %s", item.Quantity, name))
+			foodIDs = append(foodIDs, item.ID)
+		}
+
+		apiKey := os.Getenv("API_KEY")
+		ctx := context.Background()
+		client, _ := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+		defer client.Close()
+
+		model := client.GenerativeModel("gemini-2.5-flash")
+		prompt := fmt.Sprintf(
+			"Create a guide for making organic fertilizer using the following ingredients: %s.\n\n"+
+				"Start directly with the fertilizer title. Write it in an engaging and easy-to-read style suitable for the application. Each step should be neatly formatted, well-spaced, and the numbering aligned.\n\n"+
+				"🌱 Fertilizer Title\n"+
+				"📝 A short description of the fertilizer and its benefits\n"+
+				"🥬 Ingredients:\n"+
+				"- Use emojis that match the ingredients (e.g., 🍌, 🥕, 🥬, 🍃)\n\n"+
+				"🔧 Preparation Steps:\n"+
+				"- Write clear and concise steps\n"+
+				"- Add emojis for key actions (e.g., ✂️ for cutting, 🥄 for mixing, ⏰ for fermentation)\n\n"+
+				"💡 Tips for usage and storage\n\n"+
+				"End with the sentence: '🌱 by SaveBite Eco Solutions'",
+			strings.Join(foodNames, ", "),
+		)
+
+		resp, _ := model.GenerateContent(ctx, genai.Text(prompt))
+
+		var out strings.Builder
+		for _, part := range resp.Candidates[0].Content.Parts {
+			out.WriteString(fmt.Sprintf("%v\n", part))
+		}
+
+		db.AddFoodFertilizer(foodIDs, out.String(), userID)
+		c.JSON(200, db.FertilizerResponse{Fertilizer: out.String()})
 	})
 
 	auth.DELETE("/recipes/:id", func(c *gin.Context) {
@@ -287,6 +382,19 @@ func main() {
 		c.JSON(200, gin.H{"message": "Resep dihapus"})
 	})
 
+	auth.DELETE("/fertilizers/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		userID := c.MustGet("user_id").(string)
+		var fertilizerUser string
+		err := db.DB.QueryRow("SELECT user_id FROM food_fertilizers WHERE id = ?", id).Scan(&fertilizerUser)
+		if err != nil || fertilizerUser != userID {
+			c.JSON(403, gin.H{"error": "Pupuk bukan milik Anda"})
+			return
+		}
+		db.DB.Exec("DELETE FROM food_fertilizers WHERE id = ?", id)
+		c.JSON(200, gin.H{"message": "Pupuk dihapus"})
+	})
+
 	auth.GET("/admin/foods", func(c *gin.Context) {
 		userID, _ := strconv.Atoi(c.MustGet("user_id").(string))
 		data, err := db.GetAllFoodsAdmin(userID)
@@ -300,6 +408,16 @@ func main() {
 	auth.GET("/admin/recipes", func(c *gin.Context) {
 		userID, _ := strconv.Atoi(c.MustGet("user_id").(string))
 		data, err := db.GetAllRecipesAdmin(userID)
+		if err != nil {
+			c.JSON(403, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, data)
+	})
+
+	auth.GET("/admin/fertilizers", func(c *gin.Context) {
+		userID, _ := strconv.Atoi(c.MustGet("user_id").(string))
+		data, err := db.GetAllFertilizersAdmin(userID)
 		if err != nil {
 			c.JSON(403, gin.H{"error": err.Error()})
 			return
@@ -435,4 +553,5 @@ func main() {
 	})
 
 	r.Run(":8080")
+
 }
