@@ -25,6 +25,7 @@ type Food struct {
 	Name         string `json:"name"`
 	ExpiryDate   string `json:"expiry_date"`
 	Quantity     int    `json:"quantity"`
+	Unit         string `json:"unit"`
 	CategoryName string `json:"category_name"`
 }
 
@@ -37,6 +38,7 @@ type AddFoodRequest struct {
 	Name       string `json:"name"`
 	ExpiryDate string `json:"expiry_date"`
 	Quantity   int    `json:"quantity"`
+	Unit       string `json:"unit"`
 	CategoryID int    `json:"category_id"`
 }
 
@@ -143,11 +145,11 @@ func UserHasPermission(userID int, perm string) (bool, error) {
 	return result, err
 }
 
-func AddFood(name, expiry string, quantity, userID, catID int) error {
+func AddFood(name, expiry string, quantity, userID, catID int, unit string) error {
 	_, err := DB.Exec(`
-		INSERT INTO foods (name, expiry_date, quantity, user_id, category_id) 
-		VALUES (?, ?, ?, ?, ?)
-	`, name, expiry, quantity, userID, catID)
+		INSERT INTO foods (name, expiry_date, quantity, unit, user_id, category_id) 
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, name, expiry, quantity, unit, userID, catID)
 	return err
 }
 
@@ -246,7 +248,7 @@ func SaveLoginLog(userId, username, ipAddress string) error {
 }
 
 func GetFoods(userID int) ([]Food, error) {
-	rows, err := DB.Query("SELECT food_id, food_name, expiry_date, quantity, category_name FROM view_user_foods WHERE user_id = ?", userID)
+	rows, err := DB.Query("SELECT food_id, food_name, expiry_date, quantity, unit, category_name FROM view_user_foods WHERE user_id = ?", userID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +257,7 @@ func GetFoods(userID int) ([]Food, error) {
 	var result []Food
 	for rows.Next() {
 		var f Food
-		if err := rows.Scan(&f.ID, &f.Name, &f.ExpiryDate, &f.Quantity, &f.CategoryName); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.ExpiryDate, &f.Quantity, &f.Unit, &f.CategoryName); err != nil {
 			return nil, err
 		}
 		result = append(result, f)
@@ -269,7 +271,7 @@ func GetAllFoodsAdmin(userID int) ([]map[string]interface{}, error) {
 		return nil, fmt.Errorf("permission denied to view food")
 	}
 
-	rows, err := DB.Query("SELECT food_id, food_name, quantity, expiry_date, username, category_name FROM view_all_foods")
+	rows, err := DB.Query("SELECT food_id, food_name, quantity, unit, expiry_date, username, category_name FROM view_all_foods")
 	if err != nil {
 		return nil, err
 	}
@@ -278,14 +280,15 @@ func GetAllFoodsAdmin(userID int) ([]map[string]interface{}, error) {
 	var result []map[string]interface{}
 	for rows.Next() {
 		var foodID, quantity int
-		var name, expiry, username, category string
-		if err := rows.Scan(&foodID, &name, &quantity, &expiry, &username, &category); err != nil {
+		var name, unit, expiry, username, category string
+		if err := rows.Scan(&foodID, &name, &quantity, &unit, &expiry, &username, &category); err != nil {
 			return nil, err
 		}
 		result = append(result, map[string]interface{}{
 			"id":         foodID,
 			"name":       name,
 			"quantity":   quantity,
+			"unit":       unit,
 			"expiryDate": expiry,
 			"user":       username,
 			"category":   category,

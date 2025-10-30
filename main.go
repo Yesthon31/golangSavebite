@@ -18,9 +18,10 @@ import (
 )
 
 type RecipeIngredient struct {
-	ID       int `json:"id"`
-	Quantity int `json:"quantity"`
-	FoodID   int `json:"food_id"`
+	ID       int    `json:"id"`
+	Quantity int    `json:"quantity"`
+	Unit     string `json:"unit"`
+	FoodID   int    `json:"food_id"`
 }
 
 type RecipeRequest struct {
@@ -28,9 +29,10 @@ type RecipeRequest struct {
 }
 
 type FertilizerIngredient struct {
-	ID       int `json:"id"`
-	Quantity int `json:"quantity"`
-	FoodID   int `json:"food_id"`
+	ID       int    `json:"id"`
+	Quantity int    `json:"quantity"`
+	Unit     string `json:"unit"`
+	FoodID   int    `json:"food_id"`
 }
 
 type FertilizerRequest struct {
@@ -81,20 +83,27 @@ func chatHandler(c *gin.Context) {
 	model := client.GenerativeModel("gemini-2.5-flash")
 	model.SetTemperature(0.7)
 
-	prompt := fmt.Sprintf(`The user asks: %s
+	prompt := fmt.Sprintf(`
+	The user asks: %s
+	
 	Answer in English with a neat and easy-to-read layout suitable for the application.
+	Mark the important parts with emojis, such as 🌤️ "outside air" and 🧊 "in the refrigerator".
+	in storage tips use 1. 2. 3. for the tips.
+	
 	Provide your response in the following format:
+	
 	1. If the question is about food, always include:
 	   - Shelf life at room temperature: (specify how many hours/days)
 	   - Shelf life in the refrigerator: (specify how many days)
 	   - Storage tips: (give short, practical tips)
 	
 	2. If the question is about something else:
-	   - Politely explain that the question should be about food
-	   - Do not provide irrelevant information
+	   - Politely explain that the question should be about food.
+	   - Do not provide irrelevant information.
 	
 	Use formal and friendly English. Avoid using symbols such as * or #.
-	You are an AI assistant from SaveBite, a company focused on food safety.`, req.Message)
+	You are an AI assistant from SaveBite, a company focused on food safety.
+	`, req.Message)
 
 	log.Printf("Sending prompt to Gemini with message length: %d", len(req.Message))
 
@@ -223,7 +232,7 @@ func main() {
 			return
 		}
 		userID, _ := strconv.Atoi(c.MustGet("user_id").(string))
-		err := db.AddFood(req.Name, req.ExpiryDate, req.Quantity, userID, req.CategoryID)
+		err := db.AddFood(req.Name, req.ExpiryDate, req.Quantity, userID, req.CategoryID, req.Unit)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
@@ -264,7 +273,8 @@ func main() {
 		for _, item := range req.Ingredients {
 			var name string
 			var stock int
-			err := db.DB.QueryRow("SELECT name, quantity FROM foods WHERE id = ? AND user_id = ?", item.ID, userID).Scan(&name, &stock)
+			var unit string
+			err := db.DB.QueryRow("SELECT name, quantity, unit FROM foods WHERE id = ? AND user_id = ?", item.ID, userID).Scan(&name, &stock, &unit)
 			if err != nil {
 				c.JSON(404, gin.H{"error": fmt.Sprintf("Makanan ID %d tidak ditemukan", item.ID)})
 				return
@@ -273,7 +283,7 @@ func main() {
 				c.JSON(400, gin.H{"error": fmt.Sprintf("Stok tidak cukup untuk %s", name)})
 				return
 			}
-			foodNames = append(foodNames, fmt.Sprintf("%dx %s", item.Quantity, name))
+			foodNames = append(foodNames, fmt.Sprintf("%d %s %s", item.Quantity, unit, name))
 			foodIDs = append(foodIDs, item.ID)
 		}
 
@@ -284,7 +294,7 @@ func main() {
 
 		model := client.GenerativeModel("gemini-2.5-flash")
 		prompt := fmt.Sprintf(
-			"Create a delicious recipe using the following ingredients: %s.\n\n"+
+			"Create a delicious recipe using the following ingredients Try to use only those ingredients: %s.\n\n"+
 				"Start with the recipe title first, then write in an engaging and easy-to-read style suitable for the app. "+
 				"Make sure each step is neatly formatted, spaced properly, and all step numbers are aligned. "+
 				"No need for introductory phrases—go straight to the recipe title:\n\n"+
@@ -324,7 +334,8 @@ func main() {
 		for _, item := range req.Ingredients {
 			var name string
 			var stock int
-			err := db.DB.QueryRow("SELECT name, quantity FROM foods WHERE id = ? AND user_id = ?", item.ID, userID).Scan(&name, &stock)
+			var unit string
+			err := db.DB.QueryRow("SELECT name, quantity, unit FROM foods WHERE id = ? AND user_id = ?", item.ID, userID).Scan(&name, &stock, &unit)
 			if err != nil {
 				c.JSON(404, gin.H{"error": fmt.Sprintf("Makanan ID %d tidak ditemukan", item.ID)})
 				return
@@ -333,7 +344,7 @@ func main() {
 				c.JSON(400, gin.H{"error": fmt.Sprintf("Stok tidak cukup untuk %s", name)})
 				return
 			}
-			foodNames = append(foodNames, fmt.Sprintf("%dx %s", item.Quantity, name))
+			foodNames = append(foodNames, fmt.Sprintf("%d %s %s", item.Quantity, unit, name))
 			foodIDs = append(foodIDs, item.ID)
 		}
 
@@ -344,7 +355,7 @@ func main() {
 
 		model := client.GenerativeModel("gemini-2.5-flash")
 		prompt := fmt.Sprintf(
-			"Create a guide for making organic fertilizer using the following ingredients: %s.\n\n"+
+			"Create a guide for making organic fertilizer using the following ingredients Try to use only those ingredients: %s.\n\n"+
 				"Start directly with the fertilizer title. Write it in an engaging and easy-to-read style suitable for the application. Each step should be neatly formatted, well-spaced, and the numbering aligned.\n\n"+
 				"🌱 Fertilizer Title\n"+
 				"📝 A short description of the fertilizer and its benefits\n"+

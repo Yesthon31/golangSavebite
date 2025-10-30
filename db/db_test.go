@@ -60,7 +60,7 @@ func TestAddCategory(t *testing.T) {
 }
 
 func TestAddFood(t *testing.T) {
-	err := AddFood("Unit Test Food", "2025-12-31", 5, 1, 1)
+	err := AddFood("Unit Test Food", "2025-12-31", 5, 1, 1, "pcs")
 	if err != nil {
 		t.Errorf("Failed to add food: %v", err)
 	}
